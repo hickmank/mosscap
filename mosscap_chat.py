@@ -11,8 +11,31 @@ The *Mosscap* reference is from the name of the robot in Becky Chamber's
 import argparse
 import streamlit as st
 from langchain_ollama import OllamaLLM as Ollama
-from langchain.chains import ConversationChain
-from langchain.memory import ConversationBufferMemory
+
+# Old way
+#from langchain.chains import ConversationChain
+#from langchain.memory import ConversationBufferMemory
+
+# New way
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.runnables.history import RunnableWithMessageHistory
+
+
+# A simple store for single-session history
+_store: dict[str, InMemoryChatMessageHistory] = {}
+
+
+def get_session_history(session_id: str) -> InMemoryChatMessageHistory:
+    """Lazy return message history.
+    
+    Lazily create or return an *InMemoryChatMessageHistory* fro the given session_id
+
+    """
+
+    if session_id not in _store:
+        _store[session_id] = InMemoryChatMessageHistory()
+
+    return _store[session_id]
 
 
 def parse_args():
@@ -48,16 +71,22 @@ def run_app(model_name: str):
     # 1) Build the LLM + memory + chain
     @st.cache_resource
     def get_conversation_chain():
+        # Disable LangChain callback tracing.
         llm = Ollama(
             model=model_name,
-            temperature=0.7
+            temperature=0.7,
+            callbacks=[],
+            verbose=False,
+            #max_tokens=512,
+            #n_ctx=4096,
             )
-        memory = ConversationBufferMemory(
-            memory_key="history",
-            return_messages=True
-        )
 
-        return ConversationChain(llm=llm, memory=memory)
+        return RunnableWithMessageHistory(
+            llm,
+            get_session_history,
+            #input_messages_key="input",
+            #history_messages_key="history"
+        )
     
     conversation = get_conversation_chain()
 
@@ -80,7 +109,10 @@ def run_app(model_name: str):
             return
         with st.spinner("Thinking..."):
             # Each predict call prepends entire history
-            response = conversation.predict(input=prompt)
+            response = conversation.invoke(
+                prompt,
+                config={"configurable": {"session_id": "default"}}
+            )
 
         st.session_state.history.append((prompt, response))
         st.session_state.prompt = ""
